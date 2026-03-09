@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>统一认证登录</title>
+    <style>
+        :root {
+            --bg-1: #eef3f8;
+            --bg-2: #dfe8f1;
+            --panel: rgba(255, 255, 255, 0.96);
+            --line: rgba(15, 23, 42, 0.1);
+            --text: #0f172a;
+            --muted: #64748b;
+            --primary: #1d4ed8;
+            --primary-dark: #1e40af;
+            --danger: #b42318;
+            --shadow: 0 28px 70px rgba(15, 23, 42, 0.14);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "SF Pro Display", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            color: var(--text);
+            background: radial-gradient(circle at 20% 20%, rgba(29, 78, 216, 0.14), transparent 24%),
+            radial-gradient(circle at 80% 15%, rgba(14, 116, 144, 0.1), transparent 20%),
+            linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
+        }
+
+        .shell {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+
+        .card {
+            width: min(420px, 100%);
+            padding: 40px 36px 32px;
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        h1 {
+            margin: 0 0 28px;
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .field {
+            margin-bottom: 18px;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .field input {
+            width: 100%;
+            height: 48px;
+            padding: 0 14px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            outline: none;
+            font-size: 15px;
+            color: var(--text);
+            background: #fff;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .field input:focus {
+            border-color: rgba(29, 78, 216, 0.56);
+            box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.12);
+        }
+
+        .submit {
+            width: 100%;
+            height: 48px;
+            margin-top: 8px;
+            border: none;
+            border-radius: 14px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+            box-shadow: 0 14px 28px rgba(29, 78, 216, 0.22);
+        }
+
+        .submit:hover {
+            transform: translateY(-1px);
+        }
+
+        .submit:disabled {
+            opacity: 0.72;
+            cursor: wait;
+            transform: none;
+        }
+
+        .message {
+            margin-top: 16px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--danger);
+            background: rgba(180, 35, 24, 0.08);
+        }
+
+        @media (max-width: 640px) {
+            .card {
+                padding: 32px 22px 24px;
+                border-radius: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+    const {createApp, reactive} = Vue;
+
+    createApp({
+        setup() {
+            const params = new URLSearchParams(window.location.search);
+            const state = reactive({
+                form: {
+                    username: "",
+                    password: ""
+                },
+                loading: false,
+                message: ""
+            });
+
+            function resolveRedirect() {
+                debugger;
+                const fallback = "/swagger-ui/index.html";
+                const redirect = params.get("redirect");
+                if (!redirect) {
+                    return fallback;
+                }
+
+                if (redirect.startsWith("/") && !redirect.startsWith("//")) {
+                    return redirect === window.location.pathname ? fallback : redirect;
+                }
+
+                try {
+                    const url = new URL(redirect, window.location.origin);
+                    const allowedHosts = new Set(["localhost", "127.0.0.1"]);
+                    const allowedPorts = new Set(["", "80", "8080"]);
+
+                    if (allowedHosts.has(url.hostname) && allowedPorts.has(url.port)) {
+                        return url.toString();
+                    }
+                } catch (e) {
+                }
+
+                return fallback;
+            }
+
+            async function login() {
+                state.message = "";
+
+                if (!state.form.username || !state.form.password) {
+                    state.message = "请输入用户名和密码";
+                    return;
+                }
+
+                state.loading = true;
+
+                try {
+                    const response = await fetch("/auth/login", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            username: state.form.username,
+                            password: state.form.password
+                        })
+                    });
+                    debugger
+                    const data = await response.json();
+
+                    if (data.code !== 200) {
+                        throw new Error(data.message || "用户名或密码校验失败");
+                    }
+                    debugger;
+                    window.location.replace(resolveRedirect());
+                } catch (error) {
+                    state.message = error && error.message ? error.message : "登录失败";
+                } finally {
+                    state.loading = false;
+                }
+            }
+
+            return {
+                state,
+                login
+            };
+        },
+        template: `
+          <main class="shell">
+            <section class="card">
+              <h1>统一认证登录</h1>
+
+              <div class="field">
+                <label for="username">用户名</label>
+                <input
+                    id="username"
+                    v-model.trim="state.form.username"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="请输入用户名"
+                    @keydown.enter.prevent="login"
+                >
+              </div>
+
+              <div class="field">
+                <label for="password">密码</label>
+                <input
+                    id="password"
+                    v-model="state.form.password"
+                    type="password"
+                    autocomplete="current-password"
+                    placeholder="请输入密码"
+                    @keydown.enter.prevent="login"
+                >
+              </div>
+
+              <button class="submit" type="button" @click="login" :disabled="state.loading">
+                {{ state.loading ? '登录中...' : '登录' }}
+              </button>
+
+              <div v-if="state.message" class="message">{{ state.message }}</div>
+            </section>
+          </main>
+        `
+    }).mount("#app");
+</script>
+</body>
+</html>

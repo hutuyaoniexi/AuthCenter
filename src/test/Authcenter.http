@@ -1,0 +1,49 @@
+@baseUrl = http://localhost:8080
+@json = application/json
+@username = yunpf
+@password = yunpf
+
+### 登录
+POST {{baseUrl}}/auth/login
+Content-Type: {{json}}
+Accept: {{json}}
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+> {%
+client.global.set("accessToken", response.body.data.accessToken);
+client.global.set("refreshToken", response.body.data.refreshToken);
+%}
+
+### 校验 access token
+GET {{baseUrl}}/auth/check
+Authorization: Bearer {{accessToken}}
+Accept: */*
+
+### 刷新 token
+POST {{baseUrl}}/auth/refresh
+Authorization: Bearer {{refreshToken}}
+Accept: {{json}}
+
+> {%
+client.global.set("accessToken", response.body.data.accessToken);
+client.global.set("refreshToken", response.body.data.refreshToken);
+%}
+
+### 登出
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{accessToken}}
+Accept: {{json}}
+
+### 校验 refresh token 的 Cookie 方式
+POST {{baseUrl}}/auth/refresh
+Cookie: refreshToken={{refreshToken}}
+Accept: {{json}}
+
+### 校验 access token 的 Cookie 方式
+GET {{baseUrl}}/auth/check
+Cookie: accessToken={{accessToken}}
+Accept: */*
