@@ -41,3 +41,7 @@ build/
 /.idea/encodings.xml
 /.idea/misc.xml
 /.idea/vcs.xml
+/docker/config/
+/docker/auth-center-3.3.0.jar
+/auth-center.tar
+/部署说明.txt

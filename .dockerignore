@@ -1,0 +1,7 @@
+.git
+.idea
+target/*.original
+target/classes
+target/test-classes
+node_modules
+logs
