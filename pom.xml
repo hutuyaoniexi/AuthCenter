@@ -17,6 +17,7 @@
 
     <artifactId>auth-center</artifactId>
     <name>auth-center</name>
+    <version>1.0</version>
 
     <!-- 集中声明版本与编译参数，便于统一升级 -->
     <properties>

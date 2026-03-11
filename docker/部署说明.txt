@@ -1,0 +1,18 @@
+# 配置.dockerignore
+
+# 生成jar包
+mvn clean package -DskipTests
+
+# 构建镜像
+docker build --platform linux/amd64 -f docker/Dockerfile -t auth-center .
+
+# 生成镜像文件
+docker save -o docker/auth-center.tar auth-center
+
+# 加载镜像
+cd projects/auth-center/
+docker load -i auth-center.tar
+
+# 运行
+docker compose down
+docker compose up -d
