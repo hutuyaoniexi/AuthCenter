@@ -21,6 +21,7 @@ import com.box.common.security.token.JwtTokenProvider;
 import com.box.common.security.util.SecurityUtils;
 import com.box.common.web.util.IpUtils;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
@@ -173,7 +174,7 @@ public class AuthService {
 
             String jti = claims.getId();
             return StringUtils.hasText(jti) && redisService.hasKey(getTokenKey(jti));
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | JwtException e) {
             return false;
         }
 

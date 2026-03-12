@@ -10,7 +10,7 @@ docker build --platform linux/amd64 -f docker/Dockerfile -t auth-center .
 docker save -o docker/auth-center.tar auth-center
 
 # 加载镜像
-cd projects/auth-center/
+cd ~/projects/auth-center/
 docker load -i auth-center.tar
 
 # 运行

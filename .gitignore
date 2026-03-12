@@ -47,3 +47,4 @@ build/
 /部署说明.txt
 /docker/conf/application-prod.yml
 /docker/auth-center.tar
+/.idea/deployment.xml
