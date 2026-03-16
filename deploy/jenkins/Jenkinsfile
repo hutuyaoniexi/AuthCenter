@@ -1,0 +1,471 @@
+pipeline {
+    // 指定agent节点
+    agent {
+        label 'general'
+    }
+
+    // 参数化构建
+    parameters {
+        choice(name: 'ACTION', choices: ['deploy', 'rollback'], description: '执行部署还是回滚')
+        choice(name: 'DEPLOY_TARGET', choices: ['local', 'server'], description: '选择部署目标')
+        string(name: 'REMOTE_HOST', defaultValue: '101.200.89.190', description: '远程服务器 IP 或域名')
+        string(name: 'REMOTE_PORT', defaultValue: '2222', description: 'SSH 端口')
+        string(name: 'ROLLBACK_TAG', defaultValue: '', description: '回滚时指定镜像 tag，不填则回滚到上一个版本')
+    }
+
+    options {
+        timestamps() //日志增加时间戳
+        disableConcurrentBuilds() //禁止并发构建。
+        buildDiscarder(logRotator(numToKeepStr: '20')) //只保留最近 20 次构建记录
+        timeout(time: 60, unit: 'MINUTES') // 给整个流水线设置总超时时间：60 分钟。
+        skipDefaultCheckout(true)
+    }
+
+    // 环境变量
+    environment {
+        // 目录
+        BACKEND_DIR = '.'
+
+        // Docker
+        DOCKERFILE_PATH = 'deploy/docker/Dockerfile'
+        LOCAL_DOCKER_COMPOSE_FILE = 'deploy/docker/docker-compose.yml'
+        APP_NAME = 'auth-center'
+        CONTAINER_NAME = 'auth-center'
+        IMAGE_NAME = 'auth-center'
+        IMAGE_TAG = "${BUILD_NUMBER}" // 数据来与Jenkins构建编号1、2、3...
+        APP_PORT = "7582"
+
+        REMOTE_APP_DIR = '/home/dev/projects/auth-center'
+        REMOTE_TMP_DIR = '/home/dev/tmp/auth-center'
+        REMOTE_COMPOSE_FILE = '/home/dev/projects/auth-center/deploy/docker/docker-compose.yml'
+        REMOTE_DEPLOY_SCRIPT = '/home/dev/projects/auth-center/deploy/scripts/deploy.sh'
+        REMOTE_ROLLBACK_SCRIPT = '/home/dev/projects/auth-center/deploy/scripts/rollback.sh'
+
+        // 前端部署目录（nginx 静态目录）
+
+        LOCAL_BACKEND_CONFIG_DIR = '/Users/adair/develop/IdeaProjects/website/auth-center/deploy/config'
+        SERVER_BACKEND_CONFIG_DIR = '/home/dev/projects/auth-center/config'
+
+        // 镜像仓库
+        ACR_REGISTRY = 'crpi-sar4gdi5b6vkfvfg.cn-beijing.personal.cr.aliyuncs.com'
+        ACR_NAMESPACE = 'bugmaker666'
+        ACR_REPOSITORY = 'auth-center'
+        FULL_IMAGE_NAME = 'crpi-sar4gdi5b6vkfvfg.cn-beijing.personal.cr.aliyuncs.com/bugmaker666/auth-center'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo '拉取代码...'
+                checkout scm
+            }
+        }
+
+        stage('Check Project Structure') {
+            steps {
+                sh '''
+                    set -e
+                    test -f pom.xml
+                    test -f .dockerignore
+                    test -f deploy/docker/Dockerfile
+                    test -f deploy/docker/docker-compose.yml
+                    test -f deploy/scripts/deploy.sh
+                    test -f deploy/scripts/rollback.sh
+                    echo "项目结构检查通过"
+                '''
+            }
+        }
+
+
+
+
+
+
+        stage('Prepare Maven Settings') {
+            when {
+                expression { params.ACTION == 'deploy' }
+            }
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-packages',
+                        usernameVariable: 'GITHUB_USER',
+                        passwordVariable: 'GITHUB_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+                        mkdir -p "$HOME/.m2"
+                        cat > "$HOME/.m2/settings.xml" <<EOF2
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>github</id>
+      <username>${GITHUB_USER}</username>
+      <password>${GITHUB_TOKEN}</password>
+    </server>
+  </servers>
+</settings>
+EOF2
+                        sed -n '1,20p' "$HOME/.m2/settings.xml" | sed 's#<password>.*</password>#<password>***</password>#'
+                    '''
+                }
+            }
+        }
+
+        stage('Backend Test') {
+            when {
+                expression { params.ACTION == 'deploy' }
+            }
+            steps {
+                echo '执行后端测试...'
+                sh '''
+                    set -e
+                    mvn test
+                '''
+            }
+        }
+
+        stage('Build Backend') {
+            when {
+                expression { params.ACTION == 'deploy' }
+            }
+            steps {
+                echo '构建后端...'
+                sh '''
+                    set -e
+                    mvn clean package -DskipTests
+                    rm -f target/app.jar
+                    JAR_FILE=$(ls target/*.jar | grep -v 'original' | head -n 1)
+                    cp "$JAR_FILE" target/app.jar
+                    echo "使用后端包: $JAR_FILE"
+                '''
+            }
+        }
+
+        stage('Build Docker Image To Local') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'local' }
+                }
+            }
+            steps {
+                echo '构建本地 Docker 镜像...'
+                sh '''
+                    set -e
+                    docker build -f ${DOCKERFILE_PATH} \
+                      -t ${IMAGE_NAME}:latest \
+                      -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                      .
+                '''
+            }
+        }
+
+        stage('Build Docker Image To Service') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'server' }
+                }
+            }
+            steps {
+                echo '构建服务端 Docker 镜像...'
+                sh '''
+                    set -e
+                    docker build --platform linux/amd64 \
+                      -f ${DOCKERFILE_PATH} \
+                      -t ${FULL_IMAGE_NAME}:${IMAGE_TAG} \
+                      .
+                '''
+            }
+        }
+
+        stage('Deploy Backend Local') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'local' }
+                }
+            }
+            steps {
+                echo '本地部署后端...'
+                sh """
+                    set -e
+                    chmod +x deploy/scripts/deploy.sh
+                    export APP_NAME='${APP_NAME}'
+                    export CONTAINER_NAME='${CONTAINER_NAME}'
+                    export IMAGE_NAME='${IMAGE_NAME}'
+                    export IMAGE_TAG='${IMAGE_TAG}'
+                    export APP_PORT='${APP_PORT}'
+                    export CONFIG_DIR='${LOCAL_BACKEND_CONFIG_DIR}'
+                    export DOCKER_COMPOSE_FILE='${LOCAL_DOCKER_COMPOSE_FILE}'
+                    deploy/scripts/deploy.sh
+                """
+            }
+        }
+
+        stage('Push Image To ACR') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'server' }
+                }
+            }
+            steps {
+                echo '推送镜像到阿里云 ACR...'
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'acr-login',
+                        usernameVariable: 'ACR_USERNAME',
+                        passwordVariable: 'ACR_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+                        echo "$ACR_PASSWORD" | docker login ${ACR_REGISTRY} -u "$ACR_USERNAME" --password-stdin
+                        docker push ${FULL_IMAGE_NAME}:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+
+        stage('Upload Frontend And Deploy Files To Server') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'server' }
+                }
+            }
+            steps {
+                echo '上传部署文件到远程服务器...'
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'server-ssh',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh """
+                        set -e
+                        SSH_OPTS="-i \$SSH_KEY -p ${params.REMOTE_PORT} -o StrictHostKeyChecking=no"
+                        SCP_OPTS="-i \$SSH_KEY -P ${params.REMOTE_PORT} -o StrictHostKeyChecking=no"
+
+                        ssh \$SSH_OPTS \$SSH_USER@${params.REMOTE_HOST} '
+                            mkdir -p \
+                              ${REMOTE_APP_DIR} \
+                              ${REMOTE_TMP_DIR} \
+                              ${REMOTE_APP_DIR}/deploy/docker \
+                              ${REMOTE_APP_DIR}/deploy/scripts
+                        '
+
+                        scp \$SCP_OPTS deploy/docker/docker-compose.yml \
+                          \$SSH_USER@${params.REMOTE_HOST}:${REMOTE_COMPOSE_FILE}
+
+                        scp \$SCP_OPTS deploy/scripts/deploy.sh \
+                          \$SSH_USER@${params.REMOTE_HOST}:${REMOTE_DEPLOY_SCRIPT}
+
+                        scp \$SCP_OPTS deploy/scripts/rollback.sh \
+                          \$SSH_USER@${params.REMOTE_HOST}:${REMOTE_ROLLBACK_SCRIPT}
+
+                    """
+                }
+            }
+        }
+
+        stage('Deploy Backend Server') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'server' }
+                }
+            }
+            steps {
+                echo '远程部署后端...'
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'server-ssh',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    ),
+                    usernamePassword(
+                        credentialsId: 'acr-login',
+                        usernameVariable: 'ACR_USERNAME',
+                        passwordVariable: 'ACR_PASSWORD'
+                    )
+                ]) {
+                    sh """
+                        set -e
+                        SSH_OPTS="-i \$SSH_KEY -p ${params.REMOTE_PORT} -o StrictHostKeyChecking=no"
+                        ssh \$SSH_OPTS \$SSH_USER@${params.REMOTE_HOST} '
+                            set -e
+                            chmod +x ${REMOTE_DEPLOY_SCRIPT}
+                            echo "${ACR_PASSWORD}" | docker login ${ACR_REGISTRY} -u "${ACR_USERNAME}" --password-stdin
+                            export APP_NAME="${APP_NAME}"
+                            export CONTAINER_NAME="${CONTAINER_NAME}"
+                            export IMAGE_NAME="${FULL_IMAGE_NAME}"
+                            export IMAGE_TAG="${IMAGE_TAG}"
+                            export APP_PORT="${APP_PORT}"
+                            export CONFIG_DIR="${SERVER_BACKEND_CONFIG_DIR}"
+                            export DOCKER_COMPOSE_FILE="${REMOTE_COMPOSE_FILE}"
+                            ${REMOTE_DEPLOY_SCRIPT}
+                        '
+                    """
+                }
+            }
+        }
+
+        stage('Rollback Local') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'rollback' }
+                    expression { params.DEPLOY_TARGET == 'local' }
+                }
+            }
+            steps {
+                echo '本地回滚...'
+                sh """
+                    set -e
+                    chmod +x deploy/scripts/rollback.sh
+                    export CONTAINER_NAME='${CONTAINER_NAME}'
+                    export IMAGE_NAME='${IMAGE_NAME}'
+                    export APP_PORT='${APP_PORT}'
+                    export CONFIG_DIR='${LOCAL_BACKEND_CONFIG_DIR}'
+                    export DOCKER_COMPOSE_FILE='${LOCAL_DOCKER_COMPOSE_FILE}'
+                    export ROLLBACK_TAG='${params.ROLLBACK_TAG}'
+                    deploy/scripts/rollback.sh
+                """
+            }
+        }
+
+        stage('Rollback Server') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'rollback' }
+                    expression { params.DEPLOY_TARGET == 'server' }
+                }
+            }
+            steps {
+                echo '远程回滚...'
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'server-ssh',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh """
+                        set -e
+                        SSH_OPTS="-i \$SSH_KEY -p ${params.REMOTE_PORT} -o StrictHostKeyChecking=no"
+                        ssh \$SSH_OPTS \$SSH_USER@${params.REMOTE_HOST} '
+                            set -e
+                            chmod +x ${REMOTE_ROLLBACK_SCRIPT}
+                            export CONTAINER_NAME="${CONTAINER_NAME}"
+                            export IMAGE_NAME="${FULL_IMAGE_NAME}"
+                            export APP_PORT="${APP_PORT}"
+                            export CONFIG_DIR="${SERVER_BACKEND_CONFIG_DIR}"
+                            export DOCKER_COMPOSE_FILE="${REMOTE_COMPOSE_FILE}"
+                            export ROLLBACK_TAG="${params.ROLLBACK_TAG}"
+                            ${REMOTE_ROLLBACK_SCRIPT}
+                        '
+                    """
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    if (params.DEPLOY_TARGET == 'local') {
+                        sh '''
+                            set -e
+                            echo "等待本地服务启动..."
+                            for i in $(seq 1 18); do
+                                echo "第 $i 次健康检查..."
+                                if docker exec ${CONTAINER_NAME} sh -c 'curl -fsS http://127.0.0.1:'"${APP_PORT}"'/actuator/health >/dev/null 2>&1 || wget -qO- http://127.0.0.1:'"${APP_PORT}"'/actuator/health >/dev/null 2>&1'; then
+                                    exit 0
+                                fi
+                                sleep 5
+                            done
+
+                            echo "健康检查失败，输出容器状态和日志"
+                            docker ps -a | grep ${CONTAINER_NAME} || true
+                            docker logs --tail 200 ${CONTAINER_NAME} || true
+                            exit 1
+                        '''
+                    } else {
+                        withCredentials([
+                            sshUserPrivateKey(
+                                credentialsId: 'server-ssh',
+                                keyFileVariable: 'SSH_KEY',
+                                usernameVariable: 'SSH_USER'
+                            )
+                        ]) {
+                            sh """
+                                set -e
+                                SSH_OPTS="-i \$SSH_KEY -p ${params.REMOTE_PORT} -o StrictHostKeyChecking=no"
+                                ssh \$SSH_OPTS \$SSH_USER@${params.REMOTE_HOST} '
+                                    set -e
+                                    for i in \$(seq 1 18); do
+                                        echo "第 \$i 次健康检查..."
+                                        if curl -fsS http://127.0.0.1:${APP_PORT}/actuator/health; then
+                                            exit 0
+                                        fi
+                                        sleep 5
+                                    done
+
+                                    echo "健康检查失败，输出容器状态和日志"
+                                    docker ps -a | grep ${CONTAINER_NAME} || true
+                                    docker logs --tail 200 ${CONTAINER_NAME} || true
+                                    exit 1
+                                '
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Clean Old Images') {
+            when {
+                allOf {
+                    expression { params.ACTION == 'deploy' }
+                    expression { params.DEPLOY_TARGET == 'local' }
+                }
+            }
+            steps {
+                echo '清理本地旧镜像，仅保留最近 5 个版本...'
+                sh '''
+                    set -e
+                    KEEP_COUNT=5
+                    OLD_TAGS=$(docker images ${IMAGE_NAME} --format "{{.Tag}}" | \
+                        grep -E '^[0-9]+$' | \
+                        sort -nr | \
+                        tail -n +$((KEEP_COUNT + 1)))
+
+                    if [ -n "$OLD_TAGS" ]; then
+                        for tag in $OLD_TAGS; do
+                            docker rmi "${IMAGE_NAME}:$tag" || true
+                        done
+                    fi
+
+                    docker image prune -f || true
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo '部署成功'
+        }
+        failure {
+            echo '部署失败'
+        }
+        always {
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}

@@ -1,16 +1,16 @@
 services:
   auth-center:
-    image: auth-center
-    container_name: auth-center
+    container_name: "${CONTAINER_NAME}"
+    image: "${IMAGE_NAME}:${IMAGE_TAG}"
     ports:
-      - "8080:8080"
+      - "${APP_PORT}:${APP_PORT}"
     environment:
       SPRING_PROFILES_ACTIVE: prod
     restart: always
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
-      - ./config:/app/config
+      - ${CONFIG_DIR}:/app/config:ro
     networks:
       - infra-net
 
