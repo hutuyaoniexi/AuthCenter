@@ -6,6 +6,7 @@ services:
       - "${APP_PORT}:${APP_PORT}"
     environment:
       SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: "-Xms128m -Xmx256m"
     restart: always
     volumes:
       - /etc/localtime:/etc/localtime:ro
